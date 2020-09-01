@@ -2,6 +2,7 @@ import os
 
 import discord
 from dotenv import load_dotenv
+from datetime import date
 
 import psycopg2
 
@@ -82,7 +83,7 @@ class StringParser:
         command = message.split(" ")[0].lower()
 
         # Forward the message to the adequate function
-        if command == "atividade":
+        if command == "atividade" or command == "adicionar" or command == "add":
             return self.new_activity(message)
 
         elif command == "ls" or command == "atividades":
@@ -104,6 +105,24 @@ class StringParser:
         aux = message.split("-d ")
         schedule = False if len(aux) < 2 else (aux[1].split(" -")[0])
 
+        # Schedule is expected to be as dd/mm/yyyy or dd/mm
+        # Either way, it must be converted to SQL format yyyy-mm-dd
+        if schedule:
+            aux = schedule.split("/")
+            day = aux[0].rjust(2, '0')
+            month = aux[1].rjust(2, '0')
+
+            if len(aux) == 3 and len(aux[2]) >= 2:
+                year = aux[2]
+            else:
+                # Infer the year. The current or the next one
+                today = date.today()
+
+                passed = int(month) < today.month or (int(month) == today.month and int(day) < today.day)
+                year = str(today.year + 1) if passed else str(today.year)
+
+            schedule = f"{year}-{month}-{day}"
+
         aux = message.split("-m ")
         subject = False if len(aux) < 2 else (aux[1].split(" -")[0])
 
@@ -119,7 +138,9 @@ class StringParser:
 
         if title and schedule and subject:
             if self.database.save_activity(title, schedule, subject):
-                return "Matéria salva no banco de dados 😎🎲"
+                # I am fully aware that this is a cursed way to insert emojis
+                return f"Matéria salva no banco de dados 😎🎲\n" \
+                       f"Dia {schedule}, ({subject}) {title}"
             else:
                 return "*Ocorreu um erro ao salvar a matéria no banco de dados* :cry:"
         else:

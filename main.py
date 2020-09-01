@@ -25,9 +25,15 @@ class DatabaseManager:
     def init_database(self):
         sql = "CREATE TABLE IF NOT EXISTS atividades ( id SERIAL, titulo VARCHAR(255) NOT NULL , data_agendamento " \
               "DATE NOT NULL , materia VARCHAR(255) NOT NULL , PRIMARY KEY(id) ); "
-        self.cur.execute(sql)
+        try:
+            self.cur.execute(sql)
+            self.conn.commit()
+            return True
 
-    # Save a activity to the database
+        except psycopg2.Error:
+            return False
+
+    # Save an activity into the database
     def save_activity(self, title: str, schedule_date: str, subject: str) -> bool:
 
         try:
@@ -40,7 +46,8 @@ class DatabaseManager:
 
             return True
 
-        except psycopg2.Error:
+        except psycopg2.Error as err:
+            print(f"Something went bad when trying to save to the database. This is what we got: \n{err}")
             return False
 
     # Retrieve all activities
@@ -49,17 +56,20 @@ class DatabaseManager:
             response = "__**Lista de atividades**__\n"
             response += "```\n"
 
-            self.cur.execute("SELECT * from atividades ORDER BY data_agendamento;")
+            self.cur.execute("SELECT * from atividades ORDER BY data_agendamento, materia, titulo;")
             records = self.cur.fetchall()
 
-            for row in records:
-                response += f"{str(row[2])} ({row[3]}) {row[1]}\n"
+            if len(records) == 0:
+                response = "__Não há nada agendado__"
+                return response
 
+            for row in records:
+                response += f"{str(row[2])}  {row[3].ljust(8).upper()} {row[1]}\n"
 
             return response + "```"
 
-        except psycopg2.Error:
-            return False
+        except psycopg2.Error as err:
+            return f"**Ocorreu um erro ao acessar o banco de dados** :cry:\n\n```\n{err}```"
 
 
 # Deals with the messages from the users
@@ -108,8 +118,10 @@ class StringParser:
             response += "Por favor, informe a **matéria** da atividade usando `-m AED1`\n"
 
         if title and schedule and subject:
-            self.database.save_activity(title, schedule, subject)
-            return "Matéria salva no banco de dados 😎🎲"
+            if self.database.save_activity(title, schedule, subject):
+                return "Matéria salva no banco de dados 😎🎲"
+            else:
+                return "*Ocorreu um erro ao salvar a matéria no banco de dados* :cry:"
         else:
             return response
 
@@ -123,11 +135,14 @@ class DcUfscarBot(discord.Client):
     def __init__(self, **options):
         super().__init__(**options)
         self.parser = StringParser()
+        self.database = DatabaseManager()
 
-    @staticmethod
-    async def on_ready():
-        print(f'{client.user} has connected to Discord!')
-        vi = client.guilds[0]
+    async def on_ready(self):
+        self.database.init_database()
+        self.database.__del__()
+
+        print(f'{self.user} has connected to Discord!')
+        vi = self.guilds[0]
 
         print(vi)
 
@@ -135,13 +150,9 @@ class DcUfscarBot(discord.Client):
             print(member)
 
     async def on_message(self, message):
-        if message.author.id != client.user.id:
+        if message.author.id != self.user.id:
             await message.channel.send(self.parser.decode_message(message.content))
 
-
-# Initializes the database
-manager = DatabaseManager()
-manager.init_database()
 
 # Runs the bot
 client = DcUfscarBot()

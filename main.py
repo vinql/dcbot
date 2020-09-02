@@ -1,10 +1,10 @@
 import os
 
 import discord
+import psycopg2
+import queries as queries
 from dotenv import load_dotenv
 from datetime import date
-
-import psycopg2
 
 # Loads the env variables
 load_dotenv()
@@ -24,8 +24,7 @@ class DatabaseManager:
 
     # Initializes the database
     def init_database(self):
-        sql = "CREATE TABLE IF NOT EXISTS atividades ( id SERIAL, titulo VARCHAR(255) NOT NULL , data_agendamento " \
-              "DATE NOT NULL , materia VARCHAR(255) NOT NULL , PRIMARY KEY(id) ); "
+        sql = queries.create_table
         try:
             self.cur.execute(sql)
             self.conn.commit()
@@ -38,9 +37,21 @@ class DatabaseManager:
     def save_activity(self, title: str, schedule_date: str, subject: str) -> bool:
 
         try:
-            self.cur.execute(
-                f"INSERT INTO atividades (id, titulo, data_agendamento, materia) VALUES (DEFAULT, '{title}', "
-                f"'{schedule_date}', '{subject}')")
+            self.cur.execute(queries.insert(title, schedule_date, subject))
+
+            # Consolidate the changes
+            self.conn.commit()
+
+            print("This happened")
+            return True
+
+        except psycopg2.Error as err:
+            print(f"Something went bad when trying to save to the database. This is what we got: \n{err}")
+            return False
+
+    def delete_activity(self, identifier: str):
+        try:
+            self.cur.execute(queries.delete_by_identifier(identifier))
 
             # Consolidate the changes
             self.conn.commit()
@@ -52,12 +63,12 @@ class DatabaseManager:
             return False
 
     # Retrieve all activities
-    def retrieve_activities(self):
+    def retrieve_activities(self, full_result: bool = False):
         try:
             response = "__**Lista de atividades**__\n"
             response += "```\n"
 
-            self.cur.execute("SELECT * from atividades ORDER BY data_agendamento, materia, titulo;")
+            self.cur.execute(queries.select_all)
             records = self.cur.fetchall()
 
             if len(records) == 0:
@@ -65,6 +76,8 @@ class DatabaseManager:
                 return response
 
             for row in records:
+                if full_result:
+                    response += f"[{row[0]}] "
                 response += f"{str(row[2])}  {row[3].ljust(8).upper()} {row[1]}\n"
 
             return response + "```"
@@ -74,12 +87,12 @@ class DatabaseManager:
 
 
 # Deals with the messages from the users
-class StringParser:
+class CommandParser:
 
     def __init__(self):
         self.database = DatabaseManager()
 
-    def decode_message(self, message: str) -> str:
+    def decode_message(self, message: str):
         command = message.split(" ")[0].lower()
 
         # Forward the message to the adequate function
@@ -87,15 +100,16 @@ class StringParser:
             return self.new_activity(message)
 
         elif command == "ls" or command == "atividades":
-            return self.all_activities()
+            return self.database.retrieve_activities(full_result=True) if "-a" in message \
+                else self.database.retrieve_activities()
+
+        elif command == "del" or command == "deletar":
+            return self.delete_activity(message)
 
         elif command == "prova":
             return self.new_avaliation(message)
 
-        return command.lower()
-
-    def all_activities(self):
-        return self.database.retrieve_activities()
+        return False
 
     def new_activity(self, message: str):
         # atividade -t alguma coisa -d 10/01/2020 -m SO
@@ -112,8 +126,10 @@ class StringParser:
             day = aux[0].rjust(2, '0')
             month = aux[1].rjust(2, '0')
 
+            # User did inform the year
             if len(aux) == 3 and len(aux[2]) >= 2:
                 year = aux[2]
+            # User did not inform the year
             else:
                 # Infer the year. The current or the next one
                 today = date.today()
@@ -146,6 +162,12 @@ class StringParser:
         else:
             return response
 
+    def delete_activity(self, message: str):
+        aux = message.split()
+        row_id = False if len(aux) != 2 else aux[1]
+
+        return True if row_id and self.database.delete_activity(row_id) else False
+
     @staticmethod
     def new_avaliation(message: str):
         return f"Avaliação {message}"
@@ -155,7 +177,7 @@ class DcUfscarBot(discord.Client):
 
     def __init__(self, **options):
         super().__init__(**options)
-        self.parser = StringParser()
+        self.parser = CommandParser()
         self.database = DatabaseManager()
 
     async def on_ready(self):
@@ -172,7 +194,10 @@ class DcUfscarBot(discord.Client):
 
     async def on_message(self, message):
         if message.author.id != self.user.id:
-            await message.channel.send(self.parser.decode_message(message.content))
+            response = self.parser.decode_message(message.content)
+
+            if response:
+                await message.channel.send(response)
 
 
 # Runs the bot
